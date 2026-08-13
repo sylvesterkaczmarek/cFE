@@ -1,0 +1,35 @@
+name: Finalize 2782
+
+on:
+  push:
+    branches:
+      - tooling-2782-finalize
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix-2782-time-print-32bit-final
+      - name: Apply formatter correction
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("modules/time/ut-coverage/time_UT.c")
+          text = path.read_text()
+          old = "                     timeBuf);\n    }\n\n}\n\n/*\n** Test function for use with register and unregister synch callback API tests"
+          new = "                     timeBuf);\n    }\n}\n\n/*\n** Test function for use with register and unregister synch callback API tests"
+          if text.count(old) != 1:
+              raise RuntimeError(f"Expected one formatter match, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+      - name: Commit correction
+        run: |
+          git config user.name "Sylvester Kaczmarek"
+          git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
+          git add modules/time/ut-coverage/time_UT.c
+          git commit -m "Fix #2782, apply formatting"
+          git push origin HEAD:fix-2782-time-print-32bit-final
