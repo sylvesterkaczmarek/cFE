@@ -1,0 +1,49 @@
+name: Validate 2782 on 32-bit Linux
+
+on:
+  push:
+    branches:
+      - validate-2782-32bit
+
+env:
+  SIMULATION: native
+  ENABLE_UNIT_TESTS: true
+  OMIT_DEPRECATED: false
+  BUILDTYPE: debug
+  CFLAGS: -m32
+  CXXFLAGS: -m32
+  LDFLAGS: -m32
+
+jobs:
+  time-32bit:
+    runs-on: ubuntu-22.04
+    container: ghcr.io/core-flight-system/cfsbuildenv-linux:latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout cFE
+        uses: actions/checkout@v6
+        with:
+          path: cfe
+      - name: Install 32-bit toolchain
+        run: |
+          apt-get update
+          apt-get install -y gcc-multilib g++-multilib libc6-dev-i386 file
+      - name: Set up dependencies
+        uses: ./cfe/.github/actions/setup-cfe
+        with:
+          source-dir: .
+          org: nasa
+      - name: Prepare build
+        run: make prep
+      - name: Build TIME unit tests
+        run: |
+          make -C build mission-prebuild
+          make -C build/native/default_cpu1/time
+      - name: Verify 32-bit executable and run TIME tests
+        run: |
+          runner=$(find build/native/default_cpu1/time -type f -name 'coverage-time-ALL-testrunner' -print -quit)
+          test -n "$runner"
+          file "$runner" | tee /tmp/file.txt
+          grep -q 'ELF 32-bit' /tmp/file.txt
+          cd build/native/default_cpu1/time
+          ctest --output-on-failure
