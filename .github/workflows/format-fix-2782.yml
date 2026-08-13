@@ -1,0 +1,30 @@
+name: Format fix 2782
+
+on:
+  push:
+    branches:
+      - fix-2782-time-print-32bit
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-22.04
+    container: ghcr.io/core-flight-system/cfsbuildenv-linux:latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix-2782-time-print-32bit
+      - name: Apply repository formatting
+        run: |
+          curl -fsL https://github.com/nasa/cFS/raw/refs/heads/dev/.clang-format > /tmp/clang-format.yml
+          clang-format-19 -style=file:/tmp/clang-format.yml -i modules/time/fsw/src/cfe_time_api.c modules/time/ut-coverage/time_UT.c
+          rm .github/workflows/format-fix-2782.yml
+      - name: Commit formatting
+        run: |
+          git config user.name "Sylvester Kaczmarek"
+          git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
+          git add modules/time/fsw/src/cfe_time_api.c modules/time/ut-coverage/time_UT.c .github/workflows/format-fix-2782.yml
+          git commit -m "Fix #2782, apply formatting"
+          git push origin HEAD:fix-2782-time-print-32bit
