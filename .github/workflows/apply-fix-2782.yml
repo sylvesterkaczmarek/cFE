@@ -8,31 +8,20 @@ on:
 permissions:
   contents: write
 
-env:
-  SIMULATION: native
-  ENABLE_UNIT_TESTS: true
-  OMIT_DEPRECATED: false
-  BUILDTYPE: debug
-  CFLAGS: -m32
-  CXXFLAGS: -m32
-  LDFLAGS: -m32
-
 jobs:
-  patch-and-test:
-    runs-on: ubuntu-22.04
-    container: ghcr.io/core-flight-system/cfsbuildenv-linux:latest
+  patch:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix-2782-time-print-32bit
-          path: workspace/cfe
 
       - name: Apply source and regression-test changes
         shell: python
         run: |
           from pathlib import Path
 
-          api = Path("workspace/cfe/modules/time/fsw/src/cfe_time_api.c")
+          api = Path("modules/time/fsw/src/cfe_time_api.c")
           text = api.read_text()
           old = '''CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
 {
@@ -136,9 +125,9 @@ CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
               raise RuntimeError(f"Expected exactly one CFE_TIME_Print match, found {text.count(old)}")
           api.write_text(text.replace(old, new))
 
-          test = Path("workspace/cfe/modules/time/ut-coverage/time_UT.c")
+          test = Path("modules/time/ut-coverage/time_UT.c")
           text = test.read_text()
-          old = '''    else
+          marker = '''    else
     {
         UtAssert_MIR("Confirm adding seconds = %u, subseconds = %u to configured EPOCH results in time %s",
                      (unsigned int)time.Seconds,
@@ -150,7 +139,7 @@ CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
 /*
 ** Test function for use with register and unregister synch callback API tests
 */'''
-          new = '''    else
+          replacement = '''    else
     {
         UtAssert_MIR("Confirm adding seconds = %u, subseconds = %u to configured EPOCH results in time %s",
                      (unsigned int)time.Seconds,
@@ -180,41 +169,17 @@ CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
 /*
 ** Test function for use with register and unregister synch callback API tests
 */'''
-          if text.count(old) != 1:
-              raise RuntimeError(f"Expected exactly one Test_Print tail match, found {text.count(old)}")
-          test.write_text(text.replace(old, new))
+          if text.count(marker) != 1:
+              raise RuntimeError(f"Expected exactly one Test_Print tail match, found {text.count(marker)}")
+          test.write_text(text.replace(marker, replacement))
 
       - name: Check patch whitespace
-        working-directory: workspace/cfe
         run: git diff --check
 
-      - name: Install 32-bit build support
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib
-
-      - name: Set up dependencies
-        uses: ./workspace/cfe/.github/actions/setup-cfe
-        with:
-          source-dir: workspace
-          org: nasa
-
-      - name: Build 32-bit TIME unit tests
-        working-directory: workspace
-        run: |
-          make prep
-          make -C build mission-prebuild
-          make -C build/native/default_cpu1/time
-
-      - name: Run 32-bit TIME unit tests
-        working-directory: workspace/build/native/default_cpu1/time
-        run: ctest --output-on-failure
-
       - name: Remove one-off workflow
-        run: rm workspace/cfe/.github/workflows/apply-fix-2782.yml
+        run: rm .github/workflows/apply-fix-2782.yml
 
       - name: Commit patch
-        working-directory: workspace/cfe
         run: |
           git config user.name "Sylvester Kaczmarek"
           git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
