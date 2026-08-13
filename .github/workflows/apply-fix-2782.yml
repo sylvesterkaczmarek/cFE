@@ -1,0 +1,223 @@
+name: Apply fix 2782
+
+on:
+  push:
+    branches:
+      - fix-2782-time-print-32bit
+
+permissions:
+  contents: write
+
+env:
+  SIMULATION: native
+  ENABLE_UNIT_TESTS: true
+  OMIT_DEPRECATED: false
+  BUILDTYPE: debug
+  CFLAGS: -m32
+  CXXFLAGS: -m32
+  LDFLAGS: -m32
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-22.04
+    container: ghcr.io/core-flight-system/cfsbuildenv-linux:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-2782-time-print-32bit
+          path: workspace/cfe
+
+      - name: Apply source and regression-test changes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          api = Path("workspace/cfe/modules/time/fsw/src/cfe_time_api.c")
+          text = api.read_text()
+          old = '''CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
+{
+    size_t    FmtLen = 0;
+    uint32    Micros = (CFE_TIME_Sub2MicroSecs(TimeToPrint.Subseconds) + CFE_MISSION_TIME_EPOCH_MICROS) / 10;
+    struct tm tm     = { 0 };
+
+    if (PrintBuffer == NULL)
+    {
+        return CFE_TIME_BAD_ARGUMENT;
+    }
+
+    time_t sec = TimeToPrint.Seconds + CFE_MISSION_TIME_EPOCH_SECONDS; // epoch is Jan 1, 1980
+
+    if (gmtime_r(&sec, &tm) == NULL)
+    {
+        return CFE_TIME_BAD_ARGUMENT;
+    }
+
+    FmtLen            = strftime(PrintBuffer, CFE_TIME_PRINTED_STRING_SIZE - 6, "%Y-%j-%H:%M:%S", &tm);
+    PrintBuffer      += FmtLen;
+    *(PrintBuffer++)  = '.';
+
+    *(PrintBuffer++) = '0' + (char)((Micros % 100000) / 10000);
+    *(PrintBuffer++) = '0' + (char)((Micros % 10000) / 1000);
+    *(PrintBuffer++) = '0' + (char)((Micros % 1000) / 100);
+    *(PrintBuffer++) = '0' + (char)((Micros % 100) / 10);
+    *(PrintBuffer++) = '0' + (char)(Micros % 10);
+    *PrintBuffer     = '\\0';
+    return CFE_SUCCESS;
+}'''
+          new = '''static void CFE_TIME_UnixSecondsToTm(struct tm *Time, uint64 UnixSeconds)
+{
+    uint64 Days;
+    uint32 SecondsOfDay;
+    uint32 Year;
+    uint32 DaysInYear;
+
+    Days         = UnixSeconds / 86400;
+    SecondsOfDay = UnixSeconds % 86400;
+    Year         = 1970;
+
+    while (true)
+    {
+        DaysInYear = 365;
+        if (((Year % 4) == 0) && (((Year % 100) != 0) || ((Year % 400) == 0)))
+        {
+            ++DaysInYear;
+        }
+
+        if (Days < DaysInYear)
+        {
+            break;
+        }
+
+        Days -= DaysInYear;
+        ++Year;
+    }
+
+    Time->tm_year = (int)Year - 1900;
+    Time->tm_yday = (int)Days;
+    Time->tm_hour = (int)(SecondsOfDay / 3600);
+    SecondsOfDay %= 3600;
+    Time->tm_min = (int)(SecondsOfDay / 60);
+    Time->tm_sec = (int)(SecondsOfDay % 60);
+}
+
+CFE_Status_t CFE_TIME_Print(char *PrintBuffer, CFE_TIME_SysTime_t TimeToPrint)
+{
+    size_t    FmtLen = 0;
+    uint32    Micros = (CFE_TIME_Sub2MicroSecs(TimeToPrint.Subseconds) + CFE_MISSION_TIME_EPOCH_MICROS) / 10;
+    uint64    UnixSeconds;
+    struct tm tm = { 0 };
+
+    if (PrintBuffer == NULL)
+    {
+        return CFE_TIME_BAD_ARGUMENT;
+    }
+
+    UnixSeconds = (uint64)TimeToPrint.Seconds + (uint64)CFE_MISSION_TIME_EPOCH_SECONDS;
+    CFE_TIME_UnixSecondsToTm(&tm, UnixSeconds);
+
+    FmtLen = strftime(PrintBuffer, CFE_TIME_PRINTED_STRING_SIZE - 6, "%Y-%j-%H:%M:%S", &tm);
+    if (FmtLen == 0)
+    {
+        return CFE_TIME_BAD_ARGUMENT;
+    }
+
+    PrintBuffer      += FmtLen;
+    *(PrintBuffer++)  = '.';
+
+    *(PrintBuffer++) = '0' + (char)((Micros % 100000) / 10000);
+    *(PrintBuffer++) = '0' + (char)((Micros % 10000) / 1000);
+    *(PrintBuffer++) = '0' + (char)((Micros % 1000) / 100);
+    *(PrintBuffer++) = '0' + (char)((Micros % 100) / 10);
+    *(PrintBuffer++) = '0' + (char)(Micros % 10);
+    *PrintBuffer     = '\\0';
+    return CFE_SUCCESS;
+}'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"Expected exactly one CFE_TIME_Print match, found {text.count(old)}")
+          api.write_text(text.replace(old, new))
+
+          test = Path("workspace/cfe/modules/time/ut-coverage/time_UT.c")
+          text = test.read_text()
+          old = '''    else
+    {
+        UtAssert_MIR("Confirm adding seconds = %u, subseconds = %u to configured EPOCH results in time %s",
+                     (unsigned int)time.Seconds,
+                     (unsigned int)time.Subseconds,
+                     timeBuf);
+    }
+}
+
+/*
+** Test function for use with register and unregister synch callback API tests
+*/'''
+          new = '''    else
+    {
+        UtAssert_MIR("Confirm adding seconds = %u, subseconds = %u to configured EPOCH results in time %s",
+                     (unsigned int)time.Seconds,
+                     (unsigned int)time.Subseconds,
+                     timeBuf);
+    }
+
+    /* Test the maximum seconds value, including the 2100 non-leap-century boundary */
+    time.Subseconds = 0;
+    time.Seconds    = 0xffffffff;
+
+    CFE_UtAssert_SUCCESS(CFE_TIME_Print(timeBuf, time));
+    if (usingDefaultEpoch)
+    {
+        strcpy(expectedBuf, "2116-038-06:28:15.00000");
+        UtAssert_STRINGBUF_EQ(timeBuf, sizeof(timeBuf), expectedBuf, sizeof(expectedBuf));
+    }
+    else
+    {
+        UtAssert_MIR("Confirm adding seconds = %u, subseconds = %u to configured EPOCH results in time %s",
+                     (unsigned int)time.Seconds,
+                     (unsigned int)time.Subseconds,
+                     timeBuf);
+    }
+}
+
+/*
+** Test function for use with register and unregister synch callback API tests
+*/'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"Expected exactly one Test_Print tail match, found {text.count(old)}")
+          test.write_text(text.replace(old, new))
+
+      - name: Check patch whitespace
+        working-directory: workspace/cfe
+        run: git diff --check
+
+      - name: Install 32-bit build support
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Set up dependencies
+        uses: ./workspace/cfe/.github/actions/setup-cfe
+        with:
+          source-dir: workspace
+          org: nasa
+
+      - name: Build 32-bit TIME unit tests
+        working-directory: workspace
+        run: |
+          make prep
+          make -C build mission-prebuild
+          make -C build/native/default_cpu1/time
+
+      - name: Run 32-bit TIME unit tests
+        working-directory: workspace/build/native/default_cpu1/time
+        run: ctest --output-on-failure
+
+      - name: Remove one-off workflow
+        run: rm workspace/cfe/.github/workflows/apply-fix-2782.yml
+
+      - name: Commit patch
+        working-directory: workspace/cfe
+        run: |
+          git config user.name "Sylvester Kaczmarek"
+          git config user.email "16242628+sylvesterkaczmarek@users.noreply.github.com"
+          git add modules/time/fsw/src/cfe_time_api.c modules/time/ut-coverage/time_UT.c .github/workflows/apply-fix-2782.yml
+          git commit -m "Fix #2782, make TIME print independent of time_t width"
+          git push origin HEAD:fix-2782-time-print-32bit
