@@ -2079,6 +2079,13 @@ void Test_CFE_TBL_TableDumpCommon(void)
     CFE_TBL_TxnAddEvent(&Txn, -1, -1, -1);
     CFE_TBL_SendTableDumpEvents(&Txn, NULL, NULL);
     UtAssert_STUB_COUNT(CFE_EVS_SendEventWithAppID, 0); /* nothing should have been sent */
+
+    /* A transaction without a resolvable application name is a ground command. */
+    memset(&Txn, 0, sizeof(Txn));
+    UT_SetDefaultReturnValue(UT_KEY(CFE_ES_GetAppName), CFE_ES_ERR_RESOURCEID_NOT_VALID);
+    CFE_TBL_TxnAddEvent(&Txn, CFE_TBL_WRITE_DUMP_INF_EID, 0, 0);
+    CFE_TBL_SendTableDumpEvents(&Txn, Filename, "ut.table");
+    UtAssert_STUB_COUNT(CFE_EVS_SendEventWithAppID, 1);
 }
 
 /*
